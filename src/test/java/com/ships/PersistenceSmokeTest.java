@@ -36,6 +36,14 @@ public final class PersistenceSmokeTest {
                 "turning must use the shortest direction across angle wraparound");
         require(presets.get(0).shapeAt(100, 100, 0, 1).contains(100, 100),
                 "ship hit-zone shape must contain its center");
+        ShipCollision.Body leftShip = new ShipCollision.Body(10, 20, 2, 0, 10);
+        ShipCollision.Body rightShip = new ShipCollision.Body(25, 20, -2, 0, 10);
+        require(ShipCollision.bounce(leftShip, rightShip), "overlapping ships must collide");
+        require(leftShip.x < 10 && rightShip.x > 25, "colliding ships must be separated");
+        require(leftShip.vx < 0 && rightShip.vx > 0, "colliding ships must bounce apart");
+        ShipCollision.Body wallShip = new ShipCollision.Body(2, 20, -3, 0, 10);
+        require(ShipCollision.bounceAtBounds(wallShip, 100, 100, 0), "screen edge must be a collision");
+        require(wallShip.x == 10 && wallShip.vx == 3, "screen collision must reflect without damage state");
         System.out.println("Persistence and hit-zone smoke tests passed.");
     }
 

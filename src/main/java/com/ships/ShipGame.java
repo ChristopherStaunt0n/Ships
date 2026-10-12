@@ -469,6 +469,7 @@ public final class ShipGame {
     private static class Player {
         ShipPreset preset;
         double x, y, angle, health, maxHealth, speed, turnSpeed, damage, range;
+        double vx, vy;
         Player(ShipPreset preset, double x, double y, double health, double speed, double turnSpeed,
                double damage, double range) {
             this.preset = preset;
@@ -484,7 +485,7 @@ public final class ShipGame {
 
     private static class Enemy {
         final ShipPreset preset;
-        double x, y, angle, health = 80, maxHealth = 80, fireWait, sinkingTime;
+        double x, y, angle, vx, vy, health = 80, maxHealth = 80, fireWait, sinkingTime;
         EnemyBehavior behavior = new PursuitBehavior();
         Enemy(ShipPreset preset, double x, double y) { this.preset = preset; this.x = x; this.y = y; }
     }
@@ -525,6 +526,7 @@ public final class ShipGame {
         private final List<Enemy> enemies = new ArrayList<>();
         private final List<Cannonball> cannonballs = new ArrayList<>();
         private final Map<Integer, Long> cooldowns = new HashMap<>();
+        private final Map<ContactKey, Long> collisionCooldowns = new HashMap<>();
         private final Set<Integer> heldKeys = new HashSet<>();
         private final Random random = new Random();
         private int score;
@@ -630,10 +632,14 @@ public final class ShipGame {
                 player.angle = TurnMath.rotateToward(player.angle, Math.atan2(dy, dx),
                         Math.toRadians(player.turnSpeed));
             }
-            player.x += Math.max(-player.speed, Math.min(player.speed, dx));
-            player.y += Math.max(-player.speed, Math.min(player.speed, dy));
-            player.x = clamp(player.x, 20, Math.max(20, getWidth() - 20));
-            player.y = clamp(player.y, 45, Math.max(45, getHeight() - 20));
+            double playerStep = Math.min(player.speed, Math.hypot(dx, dy));
+            player.vx = Math.cos(player.angle) * playerStep;
+            player.vy = Math.sin(player.angle) * playerStep;
+            player.x += player.vx;
+            player.y += player.vy;
+            ShipCollision.Body playerBody = body(player);
+            ShipCollision.bounceAtBounds(playerBody, getWidth(), getHeight(), 40);
+            applyBody(player, playerBody);
 
             for (Enemy enemy : enemies) {
                 if (enemy.health <= 0) {
@@ -646,13 +652,19 @@ public final class ShipGame {
                 if (!enemy.behavior.getClass().equals(nextBehavior.getClass())) enemy.behavior = nextBehavior;
                 Point2D.Double direction = enemy.behavior.direction(new EnemyBehavior.EnemyContext(
                         enemy.x, enemy.y, player.x, player.y, enemy.health / enemy.maxHealth));
+                direction = avoidShips(enemy, direction);
                 if (Math.hypot(direction.x, direction.y) > 0) {
                     enemy.angle = TurnMath.rotateToward(enemy.angle, Math.atan2(direction.y, direction.x),
                             Math.toRadians(player.turnSpeed));
                     double movementSpeed = enemy.health / enemy.maxHealth < 0.28 ? 1.05 : 0.72;
-                    enemy.x += Math.cos(enemy.angle) * movementSpeed;
-                    enemy.y += Math.sin(enemy.angle) * movementSpeed;
+                    enemy.vx = Math.cos(enemy.angle) * movementSpeed;
+                    enemy.vy = Math.sin(enemy.angle) * movementSpeed;
+                    enemy.x += enemy.vx;
+                    enemy.y += enemy.vy;
                 }
+                ShipCollision.Body enemyBody = body(enemy);
+                ShipCollision.bounceAtBounds(enemyBody, getWidth(), getHeight(), 40);
+                applyBody(enemy, enemyBody);
                 enemy.fireWait -= 0.016;
                 if (enemy.fireWait <= 0 && distance < 520) {
                     Point2D.Double shot = normalized(player.x - enemy.x, player.y - enemy.y);
@@ -660,6 +672,7 @@ public final class ShipGame {
                     enemy.fireWait = 2.3 + random.nextDouble();
                 }
             }
+            resolveShipCollisions();
             List<Cannonball> remove = new ArrayList<>();
             for (Cannonball ball : cannonballs) {
                 ball.x += ball.vx; ball.y += ball.vy; ball.remaining -= Math.hypot(ball.vx, ball.vy);
@@ -687,6 +700,8 @@ public final class ShipGame {
             }
             cannonballs.removeAll(remove);
             enemies.removeIf(enemy -> enemy.health <= 0 && enemy.sinkingTime <= 0);
+            long now = System.currentTimeMillis();
+            collisionCooldowns.entrySet().removeIf(entry -> entry.getValue() <= now);
             while (enemies.size() < 7) spawnEnemy();
             if (player.health <= 0 && !gameOver) {
                 player.health = 0;
@@ -704,10 +719,150 @@ public final class ShipGame {
             repaint();
         }
 
+        private Point2D.Double avoidShips(Enemy enemy, Point2D.Double goal) {
+            double x = goal.x;
+            double y = goal.y;
+            double avoidDistance = enemy.preset.size() * 0.5 + player.preset.size() * 0.5 + 72;
+            double awayX = enemy.x - player.x;
+            double awayY = enemy.y - player.y;
+            double distance = Math.hypot(awayX, awayY);
+            if (distance < avoidDistance && distance > 0) {
+                double urgency = (avoidDistance - distance) / avoidDistance;
+                double force = 1.5 + urgency * 3.5;
+                x += awayX / distance * force;
+                y += awayY / distance * force;
+            }
+            for (Enemy other : enemies) {
+                if (other == enemy || other.health <= 0) continue;
+                awayX = enemy.x - other.x;
+                awayY = enemy.y - other.y;
+                distance = Math.hypot(awayX, awayY);
+                avoidDistance = (enemy.preset.size() + other.preset.size()) * 0.5 + 56;
+                if (distance < avoidDistance && distance > 0) {
+                    double urgency = (avoidDistance - distance) / avoidDistance;
+                    double force = 1.5 + urgency * 3.5;
+                    x += awayX / distance * force;
+                    y += awayY / distance * force;
+                }
+            }
+            return normalized(x, y);
+        }
+
+        private void resolveShipCollisions() {
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < enemies.size(); i++) {
+                Enemy first = enemies.get(i);
+                if (first.health <= 0) continue;
+                collide(player, first, now);
+                for (int j = i + 1; j < enemies.size(); j++) {
+                    if (first.health <= 0) break;
+                    Enemy second = enemies.get(j);
+                    if (second.health > 0) collide(first, second, now);
+                }
+            }
+        }
+
+        private void collide(Player first, Enemy second, long now) {
+            if (!intersects(shipShape(first), shipShape(second))) return;
+            ShipCollision.Body a = body(first), b = body(second);
+            if (!ShipCollision.bounce(a, b)) return;
+            applyBody(first, a);
+            applyBody(second, b);
+            damageOnCollision(first, second, now);
+        }
+
+        private void collide(Enemy first, Enemy second, long now) {
+            if (!intersects(shipShape(first), shipShape(second))) return;
+            ShipCollision.Body a = body(first), b = body(second);
+            if (!ShipCollision.bounce(a, b)) return;
+            applyBody(first, a);
+            applyBody(second, b);
+            damageOnCollision(first, second, now);
+        }
+
+        private void damageOnCollision(Object first, Object second, long now) {
+            ContactKey key = new ContactKey(first, second);
+            if (now < collisionCooldowns.getOrDefault(key, 0L)) return;
+            collisionCooldowns.put(key, now + 900);
+            if (first instanceof Player ship) ship.health -= 3;
+            else if (first instanceof Enemy ship) {
+                ship.health -= 3;
+                markSunk(ship);
+            }
+            if (second instanceof Player ship) ship.health -= 3;
+            else if (second instanceof Enemy ship) {
+                ship.health -= 3;
+                markSunk(ship);
+            }
+        }
+
+        private void markSunk(Enemy enemy) {
+            if (enemy.health <= 0 && enemy.sinkingTime <= 0) {
+                enemy.sinkingTime = 1.4;
+                score += 100;
+            }
+        }
+
+        private Shape shipShape(Player ship) {
+            return ship.preset.shapeAt(ship.x, ship.y, ship.angle, ship.health / ship.maxHealth);
+        }
+
+        private Shape shipShape(Enemy ship) {
+            return ship.preset.shapeAt(ship.x, ship.y, ship.angle, ship.health / ship.maxHealth);
+        }
+
+        private ShipCollision.Body body(Player ship) {
+            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.size() / 2);
+        }
+
+        private ShipCollision.Body body(Enemy ship) {
+            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.size() / 2);
+        }
+
+        private void applyBody(Player ship, ShipCollision.Body body) {
+            ship.x = body.x;
+            ship.y = body.y;
+            ship.vx = body.vx;
+            ship.vy = body.vy;
+            if (Math.hypot(body.vx, body.vy) > 0) {
+                ship.angle = Math.atan2(body.vy, body.vx);
+            }
+        }
+
+        private void applyBody(Enemy ship, ShipCollision.Body body) {
+            ship.x = body.x;
+            ship.y = body.y;
+            ship.vx = body.vx;
+            ship.vy = body.vy;
+            if (Math.hypot(body.vx, body.vy) > 0) {
+                ship.angle = Math.atan2(body.vy, body.vx);
+            }
+        }
+
         private boolean intersects(Shape a, Shape b) {
             Area overlap = new Area(a);
             overlap.intersect(new Area(b));
             return !overlap.isEmpty();
+        }
+
+        private final class ContactKey {
+            private final Object first;
+            private final Object second;
+
+            ContactKey(Object first, Object second) {
+                this.first = first;
+                this.second = second;
+            }
+
+            @Override public boolean equals(Object value) {
+                if (!(value instanceof ShipGame.GamePanel.ContactKey other)) return false;
+                return first == other.first && second == other.second
+                        || first == other.second && second == other.first;
+            }
+
+            @Override public int hashCode() {
+                return System.identityHashCode(first) ^ System.identityHashCode(second);
+            }
         }
 
         private double clamp(double value, double min, double max) { return Math.max(min, Math.min(max, value)); }
