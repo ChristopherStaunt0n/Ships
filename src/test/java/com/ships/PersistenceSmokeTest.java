@@ -1,5 +1,6 @@
 package com.ships;
 
+import java.awt.geom.Point2D;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,6 +35,12 @@ public final class PersistenceSmokeTest {
         require(TurnMath.rotateToward(Math.toRadians(179), Math.toRadians(-179), Math.toRadians(3))
                         == Math.toRadians(-179),
                 "turning must use the shortest direction across angle wraparound");
+        Point2D.Double coastingVelocity = PlayerControls.velocityTowardMouse(3, -2, -8, 7, 5, false);
+        require(coastingVelocity.x == 3 && coastingVelocity.y == -2,
+                "mouse movement must not redirect player velocity when steering is inactive");
+        Point2D.Double steeredVelocity = PlayerControls.velocityTowardMouse(3, -2, -8, 7, 5, true);
+        require(steeredVelocity.x == -5 && steeredVelocity.y == 5,
+                "holding steering must update player velocity toward the mouse");
         require(presets.get(0).shapeAt(100, 100, 0, 1).contains(100, 100),
                 "ship hit-zone shape must contain its center");
         ShipCollision.Body leftShip = new ShipCollision.Body(10, 20, 2, 0, 10);

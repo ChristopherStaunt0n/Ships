@@ -499,6 +499,22 @@ public final class ShipGame {
         }
     }
 
+    private static class TrailParticle {
+        final boolean wave;
+        double x, y, age, radius;
+        final double lifetime;
+        final Color color;
+
+        TrailParticle(double x, double y, double radius, double lifetime, boolean wave, Color color) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.lifetime = lifetime;
+            this.wave = wave;
+            this.color = color;
+        }
+    }
+
     private static final class PursuitBehavior implements EnemyBehavior {
         public Point2D.Double direction(EnemyContext c) {
             return normalized(c.playerX() - c.x(), c.playerY() - c.y());
@@ -525,6 +541,7 @@ public final class ShipGame {
         private final Player player;
         private final List<Enemy> enemies = new ArrayList<>();
         private final List<Cannonball> cannonballs = new ArrayList<>();
+        private final List<TrailParticle> trailParticles = new ArrayList<>();
         private final Map<Integer, Long> cooldowns = new HashMap<>();
         private final Map<ContactKey, Long> collisionCooldowns = new HashMap<>();
         private final Set<Integer> heldKeys = new HashSet<>();
@@ -532,8 +549,10 @@ public final class ShipGame {
         private int score;
         private double mouseX, mouseY;
         private double elapsed;
+        private double wakeElapsed;
         private boolean paused;
         private boolean gameOver;
+        private boolean steeringToMouse;
         private Runnable pauseAction, resumeAction, saveAction, loadAction, restartAction, exitAction;
 
         GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed, double damage, double range,
@@ -563,6 +582,24 @@ public final class ShipGame {
             addMouseMotionListener(new MouseMotionAdapter() {
                 @Override public void mouseMoved(MouseEvent e) { mouseX = e.getX(); mouseY = e.getY(); }
                 @Override public void mouseDragged(MouseEvent e) { mouseMoved(e); }
+            });
+            addMouseListener(new MouseAdapter() {
+                @Override public void mousePressed(MouseEvent e) {
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        steeringToMouse = true;
+                        mouseX = e.getX();
+                        mouseY = e.getY();
+                    }
+                }
+                @Override public void mouseReleased(MouseEvent e) {
+                    if (SwingUtilities.isLeftMouseButton(e)) steeringToMouse = false;
+                }
+                @Override public void mouseExited(MouseEvent e) {
+                    if ((e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) steeringToMouse = false;
+                }
+            });
+            addFocusListener(new FocusAdapter() {
+                @Override public void focusLost(FocusEvent e) { steeringToMouse = false; }
             });
             addKeyListener(new KeyAdapter() {
                 @Override public void keyPressed(KeyEvent e) {
@@ -627,14 +664,16 @@ public final class ShipGame {
         private void tick() {
             if (paused) return;
             elapsed += 0.016;
+            wakeElapsed += 0.016;
             double dx = mouseX - player.x, dy = mouseY - player.y;
-            if (Math.hypot(dx, dy) > 3) {
+            if (steeringToMouse && Math.hypot(dx, dy) > 3) {
                 player.angle = TurnMath.rotateToward(player.angle, Math.atan2(dy, dx),
                         Math.toRadians(player.turnSpeed));
             }
-            double playerStep = Math.min(player.speed, Math.hypot(dx, dy));
-            player.vx = Math.cos(player.angle) * playerStep;
-            player.vy = Math.sin(player.angle) * playerStep;
+            Point2D.Double velocity = PlayerControls.velocityTowardMouse(
+                    player.vx, player.vy, dx, dy, player.speed, steeringToMouse);
+            player.vx = velocity.x;
+            player.vy = velocity.y;
             player.x += player.vx;
             player.y += player.vy;
             ShipCollision.Body playerBody = body(player);
@@ -662,6 +701,7 @@ public final class ShipGame {
                     enemy.x += enemy.vx;
                     enemy.y += enemy.vy;
                 }
+                if (wakeElapsed >= 0.09) addWake(enemy.x, enemy.y, enemy.angle, enemy.preset.size());
                 ShipCollision.Body enemyBody = body(enemy);
                 ShipCollision.bounceAtBounds(enemyBody, getWidth(), getHeight(), 40);
                 applyBody(enemy, enemyBody);
@@ -672,10 +712,17 @@ public final class ShipGame {
                     enemy.fireWait = 2.3 + random.nextDouble();
                 }
             }
+            if (wakeElapsed >= 0.09) {
+                addWake(player.x, player.y, player.angle, player.preset.size());
+                wakeElapsed = 0;
+            }
             resolveShipCollisions();
             List<Cannonball> remove = new ArrayList<>();
             for (Cannonball ball : cannonballs) {
                 ball.x += ball.vx; ball.y += ball.vy; ball.remaining -= Math.hypot(ball.vx, ball.vy);
+                trailParticles.add(new TrailParticle(ball.x - ball.vx * 0.8, ball.y - ball.vy * 0.8,
+                        ball.fromPlayer ? 3 : 2.5, 0.48, false,
+                        ball.fromPlayer ? new Color(173, 180, 174) : new Color(145, 156, 155)));
                 Shape projectile = new Ellipse2D.Double(ball.x - 4, ball.y - 4, 8, 8);
                 if (ball.fromPlayer) {
                     for (Enemy enemy : enemies) {
@@ -699,6 +746,7 @@ public final class ShipGame {
                         ball.x > getWidth() + 15 || ball.y > getHeight() + 15) remove.add(ball);
             }
             cannonballs.removeAll(remove);
+            updateTrailParticles();
             enemies.removeIf(enemy -> enemy.health <= 0 && enemy.sinkingTime <= 0);
             long now = System.currentTimeMillis();
             collisionCooldowns.entrySet().removeIf(entry -> entry.getValue() <= now);
@@ -717,6 +765,49 @@ public final class ShipGame {
                 endDelay.start();
             }
             repaint();
+        }
+
+        private void addWake(double x, double y, double angle, double shipSize) {
+            double rearX = x - Math.cos(angle) * shipSize * 0.42;
+            double rearY = y - Math.sin(angle) * shipSize * 0.42;
+            double sideX = Math.cos(angle + Math.PI / 2);
+            double sideY = Math.sin(angle + Math.PI / 2);
+            Color water = new Color(164, 225, 218);
+            for (int side = -1; side <= 1; side++) {
+                trailParticles.add(new TrailParticle(rearX + sideX * side * shipSize * 0.2,
+                        rearY + sideY * side * shipSize * 0.2, 3 + Math.abs(side), 0.8, true, water));
+            }
+        }
+
+        private void updateTrailParticles() {
+            trailParticles.removeIf(particle -> {
+                particle.age += 0.016;
+                if (!particle.wave) {
+                    particle.x += 0.04;
+                    particle.y -= 0.08;
+                }
+                particle.radius += particle.wave ? 0.22 : 0.13;
+                return particle.age >= particle.lifetime;
+            });
+        }
+
+        private void paintTrailParticles(Graphics2D g) {
+            for (TrailParticle particle : trailParticles) {
+                float alpha = (float) Math.max(0, 1 - particle.age / particle.lifetime);
+                g.setColor(new Color(particle.color.getRed(), particle.color.getGreen(),
+                        particle.color.getBlue(), (int) (alpha * (particle.wave ? 115 : 145))));
+                if (particle.wave) {
+                    g.setStroke(new BasicStroke(1.4f));
+                    int diameter = (int) Math.round(particle.radius * 2);
+                    g.drawArc((int) Math.round(particle.x - particle.radius),
+                            (int) Math.round(particle.y - particle.radius),
+                            diameter, diameter, 15, 150);
+                } else {
+                    double diameter = particle.radius * 2;
+                    g.fill(new Ellipse2D.Double(particle.x - particle.radius,
+                            particle.y - particle.radius, diameter, diameter));
+                }
+            }
         }
 
         private Point2D.Double avoidShips(Enemy enemy, Point2D.Double goal) {
@@ -824,9 +915,6 @@ public final class ShipGame {
             ship.y = body.y;
             ship.vx = body.vx;
             ship.vy = body.vy;
-            if (Math.hypot(body.vx, body.vy) > 0) {
-                ship.angle = Math.atan2(body.vy, body.vx);
-            }
         }
 
         private void applyBody(Enemy ship, ShipCollision.Body body) {
@@ -882,6 +970,7 @@ public final class ShipGame {
             g.setColor(new Color(255, 255, 255, 15));
             for (int y = 40; y < getHeight(); y += 48) g.drawLine(0, y, getWidth(), y - 24);
             for (int x = 20; x < getWidth(); x += 72) g.drawArc(x, 70, 45, 16, 5, 170);
+            paintTrailParticles(g);
             for (Enemy enemy : enemies) {
                 Shape body = enemy.preset.shapeAt(enemy.x, enemy.y, enemy.angle, enemy.health / enemy.maxHealth);
                 g.setColor(new Color(enemy.preset.visualFor(enemy.health / enemy.maxHealth).color()));
