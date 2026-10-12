@@ -90,18 +90,20 @@ public final class ShipGame {
         presetChoice.setRenderer((list, value, index, selected, focus) ->
                 new JLabel(value == null ? "" : value.name() + "  ·  " + value.id().substring(0, 8)));
         JSlider speed = slider(2, 10, 5);
+        JSlider turnSpeed = slider(1, 18, 6);
         JSlider durability = slider(50, 300, 150);
         JSlider damage = slider(5, 40, 15);
         JSlider range = slider(200, 900, 480);
         addField(panel, "Player ship preset", presetChoice);
         addSlider(panel, "Ship speed", speed, "px / frame");
+        addSlider(panel, "Turn speed", turnSpeed, "degrees / frame");
         addSlider(panel, "Ship durability", durability, "hull points");
         addSlider(panel, "Cannon damage", damage, "damage / hit");
         addSlider(panel, "Cannon range", range, "pixels");
         JButton start = menuButton("Start voyage", () -> {
             ShipPreset chosen = (ShipPreset) presetChoice.getSelectedItem();
             if (chosen != null) startGame(chosen.id(), speed.getValue(), durability.getValue(),
-                    damage.getValue(), range.getValue(), null);
+                    turnSpeed.getValue(), damage.getValue(), range.getValue(), null);
         });
         JPanel actions = new JPanel(new FlowLayout());
         actions.setOpaque(false);
@@ -162,7 +164,7 @@ public final class ShipGame {
                     return;
                 }
                 startGame(selected.playerPresetId(), selected.speed(), selected.playerMaxHealth(),
-                        selected.damage(), selected.range(), selected);
+                        selected.turnSpeed(), selected.damage(), selected.range(), selected);
             }));
         }
         panel.add(menuButton("Back", this::showMenu));
@@ -207,7 +209,7 @@ public final class ShipGame {
         frame.revalidate();
     }
 
-    private void startGame(String presetId, double speed, double hp, double damage, double range,
+    private void startGame(String presetId, double speed, double hp, double turnSpeed, double damage, double range,
                            GameStore.SavedGame saved) {
         ShipPreset playerPreset = findPreset(presetId);
         if (playerPreset == null) {
@@ -216,7 +218,7 @@ public final class ShipGame {
             if (saved != null) showLoadGames();
             return;
         }
-        gamePanel = new GamePanel(playerPreset, speed, hp, damage, range, saved);
+        gamePanel = new GamePanel(playerPreset, speed, hp, turnSpeed, damage, range, saved);
         JPanel page = new JPanel(new CardLayout());
         page.add(gamePanel, "play");
         page.add(pauseMenu(page), "pause");
@@ -233,9 +235,10 @@ public final class ShipGame {
         gamePanel.setRestartAction(() -> {
             String id = gamePanel.player.preset.id();
             double gameSpeed = gamePanel.player.speed, gameHp = gamePanel.player.maxHealth;
+            double gameTurnSpeed = gamePanel.player.turnSpeed;
             double gameDamage = gamePanel.player.damage, gameRange = gamePanel.player.range;
             gamePanel.stop();
-            startGame(id, gameSpeed, gameHp, gameDamage, gameRange, null);
+            startGame(id, gameSpeed, gameHp, gameTurnSpeed, gameDamage, gameRange, null);
         });
         gamePanel.setExitAction(() -> {
             gamePanel.stop();
@@ -465,13 +468,15 @@ public final class ShipGame {
 
     private static class Player {
         ShipPreset preset;
-        double x, y, angle, health, maxHealth, speed, damage, range;
-        Player(ShipPreset preset, double x, double y, double health, double speed, double damage, double range) {
+        double x, y, angle, health, maxHealth, speed, turnSpeed, damage, range;
+        Player(ShipPreset preset, double x, double y, double health, double speed, double turnSpeed,
+               double damage, double range) {
             this.preset = preset;
             this.x = x;
             this.y = y;
             this.health = this.maxHealth = health;
             this.speed = speed;
+            this.turnSpeed = turnSpeed;
             this.damage = damage;
             this.range = range;
         }
@@ -529,11 +534,11 @@ public final class ShipGame {
         private boolean gameOver;
         private Runnable pauseAction, resumeAction, saveAction, loadAction, restartAction, exitAction;
 
-        GamePanel(ShipPreset preset, double speed, double hp, double damage, double range,
+        GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed, double damage, double range,
                   GameStore.SavedGame save) {
             setBackground(SEA);
             setFocusable(true);
-            player = new Player(preset, 550, 380, hp, speed, damage, range);
+            player = new Player(preset, 550, 380, hp, speed, turnSpeed, damage, range);
             if (save == null) {
                 mouseX = player.x; mouseY = player.y;
                 for (int i = 0; i < 7; i++) spawnEnemy();
@@ -621,7 +626,10 @@ public final class ShipGame {
             if (paused) return;
             elapsed += 0.016;
             double dx = mouseX - player.x, dy = mouseY - player.y;
-            if (Math.hypot(dx, dy) > 3) player.angle = Math.atan2(dy, dx);
+            if (Math.hypot(dx, dy) > 3) {
+                player.angle = TurnMath.rotateToward(player.angle, Math.atan2(dy, dx),
+                        Math.toRadians(player.turnSpeed));
+            }
             player.x += Math.max(-player.speed, Math.min(player.speed, dx));
             player.y += Math.max(-player.speed, Math.min(player.speed, dy));
             player.x = clamp(player.x, 20, Math.max(20, getWidth() - 20));
@@ -638,9 +646,13 @@ public final class ShipGame {
                 if (!enemy.behavior.getClass().equals(nextBehavior.getClass())) enemy.behavior = nextBehavior;
                 Point2D.Double direction = enemy.behavior.direction(new EnemyBehavior.EnemyContext(
                         enemy.x, enemy.y, player.x, player.y, enemy.health / enemy.maxHealth));
-                enemy.angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
-                enemy.x += direction.x * (enemy.health / enemy.maxHealth < 0.28 ? 1.05 : 0.72);
-                enemy.y += direction.y * (enemy.health / enemy.maxHealth < 0.28 ? 1.05 : 0.72);
+                if (Math.hypot(direction.x, direction.y) > 0) {
+                    enemy.angle = TurnMath.rotateToward(enemy.angle, Math.atan2(direction.y, direction.x),
+                            Math.toRadians(player.turnSpeed));
+                    double movementSpeed = enemy.health / enemy.maxHealth < 0.28 ? 1.05 : 0.72;
+                    enemy.x += Math.cos(enemy.angle) * movementSpeed;
+                    enemy.y += Math.sin(enemy.angle) * movementSpeed;
+                }
                 enemy.fireWait -= 0.016;
                 if (enemy.fireWait <= 0 && distance < 520) {
                     Point2D.Double shot = normalized(player.x - enemy.x, player.y - enemy.y);
@@ -704,7 +716,7 @@ public final class ShipGame {
             List<GameStore.EnemySave> state = enemies.stream().map(e ->
                     new GameStore.EnemySave(e.preset.id(), e.x, e.y, e.health, e.maxHealth)).toList();
             return new GameStore.SavedGame(UUID.randomUUID().toString(), name, player.preset.id(),
-                    player.x, player.y, player.health, player.maxHealth, player.speed,
+                    player.x, player.y, player.health, player.maxHealth, player.speed, player.turnSpeed,
                     player.damage, player.range, score, state);
         }
 

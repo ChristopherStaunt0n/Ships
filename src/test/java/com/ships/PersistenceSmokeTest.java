@@ -19,11 +19,21 @@ public final class PersistenceSmokeTest {
         require(restored.equals(presets), "preset JSON round-trip must preserve all visual states");
 
         GameStore.SavedGame save = new GameStore.SavedGame(UUID.randomUUID().toString(), "Smoke test",
-                presets.get(0).id(), 125, 240, 75, 100, 5, 15, 480, 120,
+                presets.get(0).id(), 125, 240, 75, 100, 5, 6, 15, 480, 120,
                 List.of(new GameStore.EnemySave(presets.get(1).id(), 400, 350, 40, 80)));
         GameStore.SavedGame restoredSave = GameStore.SavedGame.fromJson(
                 ShipPreset.object(Json.parse(Json.stringify(save.toJson()))));
         require(restoredSave.equals(save), "save JSON round-trip must preserve game state");
+        require(restoredSave.turnSpeed() == 6, "saved turn speed must round-trip");
+        Map<String, Object> legacySaveData = new java.util.LinkedHashMap<>(save.toJson());
+        legacySaveData.remove("turnSpeed");
+        GameStore.SavedGame legacySave = GameStore.SavedGame.fromJson(legacySaveData);
+        require(legacySave.turnSpeed() == 6, "older saves must receive the default turn speed");
+        require(TurnMath.rotateToward(0, Math.PI / 2, Math.PI / 4) == Math.PI / 4,
+                "turning must be limited to the configured step");
+        require(TurnMath.rotateToward(Math.toRadians(179), Math.toRadians(-179), Math.toRadians(3))
+                        == Math.toRadians(-179),
+                "turning must use the shortest direction across angle wraparound");
         require(presets.get(0).shapeAt(100, 100, 0, 1).contains(100, 100),
                 "ship hit-zone shape must contain its center");
         System.out.println("Persistence and hit-zone smoke tests passed.");

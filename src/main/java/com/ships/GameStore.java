@@ -57,8 +57,8 @@ final class GameStore {
     }
 
     record SavedGame(String id, String name, String playerPresetId, double playerX, double playerY,
-                     double playerHealth, double playerMaxHealth, double speed, double damage, double range,
-                     int score, List<EnemySave> enemies) {
+                     double playerHealth, double playerMaxHealth, double speed, double turnSpeed,
+                     double damage, double range, int score, List<EnemySave> enemies) {
         SavedGame { enemies = List.copyOf(enemies); }
         Map<String, Object> toJson() {
             List<Object> enemyData = enemies.stream().map(e -> (Object) Map.of(
@@ -73,6 +73,7 @@ final class GameStore {
             data.put("playerHealth", playerHealth);
             data.put("playerMaxHealth", playerMaxHealth);
             data.put("speed", speed);
+            data.put("turnSpeed", turnSpeed);
             data.put("damage", damage);
             data.put("range", range);
             data.put("score", score);
@@ -91,6 +92,7 @@ final class GameStore {
                     ShipPreset.string(data, "playerPresetId"), ShipPreset.number(data, "playerX"),
                     ShipPreset.number(data, "playerY"), ShipPreset.number(data, "playerHealth"),
                     ShipPreset.number(data, "playerMaxHealth"), ShipPreset.number(data, "speed"),
+                    data.containsKey("turnSpeed") ? ShipPreset.number(data, "turnSpeed") : 6,
                     ShipPreset.number(data, "damage"), ShipPreset.number(data, "range"),
                     (int) ShipPreset.number(data, "score"), enemies);
         }
