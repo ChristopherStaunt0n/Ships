@@ -175,8 +175,6 @@ public final class ShipGame {
     }
 
     private JPanel formPanel(String title) {
-        JPanel outer = new JPanel(new GridBagLayout());
-        outer.setBackground(NAVY);
         JPanel panel = new JPanel();
         panel.setBackground(PANEL);
         panel.setBorder(new EmptyBorder(24, 32, 24, 32));
@@ -187,13 +185,7 @@ public final class ShipGame {
         heading.setAlignmentX(Component.LEFT_ALIGNMENT);
         panel.add(heading);
         panel.add(Box.createVerticalStrut(18));
-        outer.add(panel);
-        // Container is returned with a helper panel wrapper to keep form rows consistent.
-        JPanel result = new JPanel(new BorderLayout());
-        result.setBackground(NAVY);
-        result.add(outer);
-        result.putClientProperty("form", panel);
-        return new FormPanel(panel, outer);
+        return panel;
     }
 
     private void addField(JPanel panel, String label, JComponent field) {
@@ -468,17 +460,6 @@ public final class ShipGame {
                 g.drawString(((ShipPreset.State) state.getSelectedItem()).name(), 15, 25);
                 g.dispose();
             }
-        }
-    }
-
-    private static class FormPanel extends JPanel {
-        FormPanel(JPanel inner, JPanel outer) {
-            super(new BorderLayout());
-            setBackground(NAVY);
-            JScrollPane scroll = new JScrollPane(inner);
-            scroll.setBorder(null);
-            scroll.setPreferredSize(new Dimension(720, 580));
-            add(scroll, BorderLayout.CENTER);
         }
     }
 
