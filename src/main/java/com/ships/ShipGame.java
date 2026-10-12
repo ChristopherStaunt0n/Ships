@@ -6,6 +6,7 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.geom.Area;
 import java.awt.geom.Ellipse2D;
+import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.util.*;
@@ -92,18 +93,24 @@ public final class ShipGame {
         JSlider speed = slider(2, 10, 5);
         JSlider turnSpeed = slider(1, 18, 6);
         JSlider durability = slider(50, 300, 150);
+        JSlider collisionReduction = slider(0, 90, 50);
+        collisionReduction.setMajorTickSpacing(10);
+        JSlider collisionDuration = slider(1, 10, 3);
         JSlider damage = slider(5, 40, 15);
         JSlider range = slider(200, 900, 480);
         addField(panel, "Player ship preset", presetChoice);
         addSlider(panel, "Ship speed", speed, "px / frame");
         addSlider(panel, "Turn speed", turnSpeed, "degrees / frame");
         addSlider(panel, "Ship durability", durability, "hull points");
+        addSlider(panel, "Collision speed reduction", collisionReduction, "%");
+        addSlider(panel, "Collision effect duration", collisionDuration, "seconds");
         addSlider(panel, "Cannon damage", damage, "damage / hit");
         addSlider(panel, "Cannon range", range, "pixels");
         JButton start = menuButton("Start voyage", () -> {
             ShipPreset chosen = (ShipPreset) presetChoice.getSelectedItem();
             if (chosen != null) startGame(chosen.id(), speed.getValue(), durability.getValue(),
-                    turnSpeed.getValue(), damage.getValue(), range.getValue(), null);
+                    turnSpeed.getValue(), collisionDuration.getValue(), collisionReduction.getValue(),
+                    damage.getValue(), range.getValue(), null);
         });
         JPanel actions = new JPanel(new FlowLayout());
         actions.setOpaque(false);
@@ -164,7 +171,8 @@ public final class ShipGame {
                     return;
                 }
                 startGame(selected.playerPresetId(), selected.speed(), selected.playerMaxHealth(),
-                        selected.turnSpeed(), selected.damage(), selected.range(), selected);
+                        selected.turnSpeed(), selected.collisionDuration(), selected.collisionReduction(),
+                        selected.damage(), selected.range(), selected);
             }));
         }
         panel.add(menuButton("Back", this::showMenu));
@@ -209,7 +217,8 @@ public final class ShipGame {
         frame.revalidate();
     }
 
-    private void startGame(String presetId, double speed, double hp, double turnSpeed, double damage, double range,
+    private void startGame(String presetId, double speed, double hp, double turnSpeed,
+                           double collisionDuration, double collisionReduction, double damage, double range,
                            GameStore.SavedGame saved) {
         ShipPreset playerPreset = findPreset(presetId);
         if (playerPreset == null) {
@@ -218,7 +227,8 @@ public final class ShipGame {
             if (saved != null) showLoadGames();
             return;
         }
-        gamePanel = new GamePanel(playerPreset, speed, hp, turnSpeed, damage, range, saved);
+        gamePanel = new GamePanel(playerPreset, speed, hp, turnSpeed, collisionDuration,
+                collisionReduction, damage, range, saved);
         JPanel page = new JPanel(new CardLayout());
         page.add(gamePanel, "play");
         page.add(pauseMenu(page), "pause");
@@ -236,9 +246,12 @@ public final class ShipGame {
             String id = gamePanel.player.preset.id();
             double gameSpeed = gamePanel.player.speed, gameHp = gamePanel.player.maxHealth;
             double gameTurnSpeed = gamePanel.player.turnSpeed;
+            double gameCollisionDuration = gamePanel.collisionDuration;
+            double gameCollisionReduction = gamePanel.collisionReduction;
             double gameDamage = gamePanel.player.damage, gameRange = gamePanel.player.range;
             gamePanel.stop();
-            startGame(id, gameSpeed, gameHp, gameTurnSpeed, gameDamage, gameRange, null);
+            startGame(id, gameSpeed, gameHp, gameTurnSpeed, gameCollisionDuration,
+                    gameCollisionReduction, gameDamage, gameRange, null);
         });
         gamePanel.setExitAction(() -> {
             gamePanel.stop();
@@ -470,8 +483,9 @@ public final class ShipGame {
         ShipPreset preset;
         double x, y, angle, health, maxHealth, speed, turnSpeed, damage, range;
         double vx, vy;
+        final CollisionSlowdown collisionSlowdown;
         Player(ShipPreset preset, double x, double y, double health, double speed, double turnSpeed,
-               double damage, double range) {
+               double damage, double range, double collisionDuration, double collisionReduction) {
             this.preset = preset;
             this.x = x;
             this.y = y;
@@ -480,14 +494,21 @@ public final class ShipGame {
             this.turnSpeed = turnSpeed;
             this.damage = damage;
             this.range = range;
+            this.collisionSlowdown = new CollisionSlowdown(collisionDuration, collisionReduction);
         }
     }
 
     private static class Enemy {
         final ShipPreset preset;
+        final CollisionSlowdown collisionSlowdown;
         double x, y, angle, vx, vy, health = 80, maxHealth = 80, fireWait, sinkingTime;
         EnemyBehavior behavior = new PursuitBehavior();
-        Enemy(ShipPreset preset, double x, double y) { this.preset = preset; this.x = x; this.y = y; }
+        Enemy(ShipPreset preset, double x, double y, double collisionDuration, double collisionReduction) {
+            this.preset = preset;
+            this.x = x;
+            this.y = y;
+            this.collisionSlowdown = new CollisionSlowdown(collisionDuration, collisionReduction);
+        }
     }
 
     private static class Cannonball {
@@ -550,16 +571,22 @@ public final class ShipGame {
         private double mouseX, mouseY;
         private double elapsed;
         private double wakeElapsed;
+        private final double collisionDuration;
+        private final double collisionReduction;
         private boolean paused;
         private boolean gameOver;
         private boolean steeringToMouse;
         private Runnable pauseAction, resumeAction, saveAction, loadAction, restartAction, exitAction;
 
-        GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed, double damage, double range,
+        GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed,
+                  double collisionDuration, double collisionReduction, double damage, double range,
                   GameStore.SavedGame save) {
             setBackground(SEA);
             setFocusable(true);
-            player = new Player(preset, 550, 380, hp, speed, turnSpeed, damage, range);
+            this.collisionDuration = collisionDuration;
+            this.collisionReduction = collisionReduction;
+            player = new Player(preset, 550, 380, hp, speed, turnSpeed, damage, range,
+                    collisionDuration, collisionReduction);
             if (save == null) {
                 mouseX = player.x; mouseY = player.y;
                 for (int i = 0; i < 7; i++) spawnEnemy();
@@ -571,7 +598,7 @@ public final class ShipGame {
                 for (GameStore.EnemySave enemy : save.enemies()) {
                     ShipPreset enemyPreset = findPreset(enemy.presetId());
                     if (enemyPreset != null) {
-                        Enemy e = new Enemy(enemyPreset, enemy.x(), enemy.y());
+                        Enemy e = new Enemy(enemyPreset, enemy.x(), enemy.y(), collisionDuration, collisionReduction);
                         e.health = enemy.health();
                         e.maxHealth = enemy.maxHealth();
                         enemies.add(e);
@@ -658,7 +685,7 @@ public final class ShipGame {
             double y = random.nextBoolean() ? random.nextInt(Math.max(1, getHeight())) : random.nextBoolean() ? 60 : getHeight() - 30;
             if (getWidth() == 0 || getHeight() == 0) { x = 100 + random.nextInt(700); y = 100 + random.nextInt(400); }
             ShipPreset preset = presets.get(random.nextInt(presets.size()));
-            enemies.add(new Enemy(preset, x, y));
+            enemies.add(new Enemy(preset, x, y, collisionDuration, collisionReduction));
         }
 
         private void tick() {
@@ -669,13 +696,17 @@ public final class ShipGame {
             if (steeringToMouse && Math.hypot(dx, dy) > 3) {
                 player.angle = TurnMath.rotateToward(player.angle, Math.atan2(dy, dx),
                         Math.toRadians(player.turnSpeed));
+            } else if (Math.hypot(player.vx, player.vy) > 0.01) {
+                player.angle = TurnMath.rotateToward(player.angle, Math.atan2(player.vy, player.vx),
+                        Math.toRadians(player.turnSpeed));
             }
             Point2D.Double velocity = PlayerControls.velocityTowardMouse(
                     player.vx, player.vy, dx, dy, player.speed, steeringToMouse);
             player.vx = velocity.x;
             player.vy = velocity.y;
-            player.x += player.vx;
-            player.y += player.vy;
+            player.x += player.vx * player.collisionSlowdown.speedMultiplier();
+            player.y += player.vy * player.collisionSlowdown.speedMultiplier();
+            player.collisionSlowdown.advance(0.016);
             ShipCollision.Body playerBody = body(player);
             ShipCollision.bounceAtBounds(playerBody, getWidth(), getHeight(), 40);
             applyBody(player, playerBody);
@@ -698,9 +729,10 @@ public final class ShipGame {
                     double movementSpeed = enemy.health / enemy.maxHealth < 0.28 ? 1.05 : 0.72;
                     enemy.vx = Math.cos(enemy.angle) * movementSpeed;
                     enemy.vy = Math.sin(enemy.angle) * movementSpeed;
-                    enemy.x += enemy.vx;
-                    enemy.y += enemy.vy;
+                    enemy.x += enemy.vx * enemy.collisionSlowdown.speedMultiplier();
+                    enemy.y += enemy.vy * enemy.collisionSlowdown.speedMultiplier();
                 }
+                enemy.collisionSlowdown.advance(0.016);
                 if (wakeElapsed >= 0.09) addWake(enemy.x, enemy.y, enemy.angle, enemy.preset.size());
                 ShipCollision.Body enemyBody = body(enemy);
                 ShipCollision.bounceAtBounds(enemyBody, getWidth(), getHeight(), 40);
@@ -875,14 +907,22 @@ public final class ShipGame {
             ContactKey key = new ContactKey(first, second);
             if (now < collisionCooldowns.getOrDefault(key, 0L)) return;
             collisionCooldowns.put(key, now + 900);
-            if (first instanceof Player ship) ship.health -= 3;
+            if (first instanceof Player ship) {
+                ship.health -= 3;
+                ship.collisionSlowdown.trigger();
+            }
             else if (first instanceof Enemy ship) {
                 ship.health -= 3;
+                ship.collisionSlowdown.trigger();
                 markSunk(ship);
             }
-            if (second instanceof Player ship) ship.health -= 3;
+            if (second instanceof Player ship) {
+                ship.health -= 3;
+                ship.collisionSlowdown.trigger();
+            }
             else if (second instanceof Enemy ship) {
                 ship.health -= 3;
+                ship.collisionSlowdown.trigger();
                 markSunk(ship);
             }
         }
@@ -960,16 +1000,14 @@ public final class ShipGame {
                     new GameStore.EnemySave(e.preset.id(), e.x, e.y, e.health, e.maxHealth)).toList();
             return new GameStore.SavedGame(UUID.randomUUID().toString(), name, player.preset.id(),
                     player.x, player.y, player.health, player.maxHealth, player.speed, player.turnSpeed,
-                    player.damage, player.range, score, state);
+                    collisionDuration, collisionReduction, player.damage, player.range, score, state);
         }
 
         @Override protected void paintComponent(Graphics graphics) {
             super.paintComponent(graphics);
             Graphics2D g = (Graphics2D) graphics.create();
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setColor(new Color(255, 255, 255, 15));
-            for (int y = 40; y < getHeight(); y += 48) g.drawLine(0, y, getWidth(), y - 24);
-            for (int x = 20; x < getWidth(); x += 72) g.drawArc(x, 70, 45, 16, 5, 170);
+            paintOceanWaves(g);
             paintTrailParticles(g);
             for (Enemy enemy : enemies) {
                 Shape body = enemy.preset.shapeAt(enemy.x, enemy.y, enemy.angle, enemy.health / enemy.maxHealth);
@@ -994,6 +1032,23 @@ public final class ShipGame {
             }
             paintHud(g);
             g.dispose();
+        }
+
+        private void paintOceanWaves(Graphics2D g) {
+            g.setColor(new Color(157, 218, 215, 36));
+            g.setStroke(new BasicStroke(1.2f));
+            double phase = elapsed * 0.8;
+            for (int row = -1; row < getHeight() / 46 + 2; row++) {
+                double baseY = row * 46 + 18;
+                Path2D wave = new Path2D.Double();
+                for (int x = -12; x <= getWidth() + 12; x += 12) {
+                    double along = x * 0.014 + phase + row * 0.63;
+                    double y = baseY + Math.sin(along) * 5 + Math.sin(along * 0.43 + phase * 0.7) * 2.2;
+                    if (x == -12) wave.moveTo(x, y);
+                    else wave.lineTo(x, y);
+                }
+                g.draw(wave);
+            }
         }
 
         private void drawHealth(Graphics2D g, double x, double y, double width, double ratio) {

@@ -20,16 +20,31 @@ public final class PersistenceSmokeTest {
         require(restored.equals(presets), "preset JSON round-trip must preserve all visual states");
 
         GameStore.SavedGame save = new GameStore.SavedGame(UUID.randomUUID().toString(), "Smoke test",
-                presets.get(0).id(), 125, 240, 75, 100, 5, 6, 15, 480, 120,
+                presets.get(0).id(), 125, 240, 75, 100, 5, 6, 3, 50, 15, 480, 120,
                 List.of(new GameStore.EnemySave(presets.get(1).id(), 400, 350, 40, 80)));
         GameStore.SavedGame restoredSave = GameStore.SavedGame.fromJson(
                 ShipPreset.object(Json.parse(Json.stringify(save.toJson()))));
         require(restoredSave.equals(save), "save JSON round-trip must preserve game state");
         require(restoredSave.turnSpeed() == 6, "saved turn speed must round-trip");
+        require(restoredSave.collisionDuration() == 3 && restoredSave.collisionReduction() == 50,
+                "collision modifiers must round-trip through save data");
         Map<String, Object> legacySaveData = new java.util.LinkedHashMap<>(save.toJson());
         legacySaveData.remove("turnSpeed");
+        legacySaveData.remove("collisionDuration");
+        legacySaveData.remove("collisionReduction");
         GameStore.SavedGame legacySave = GameStore.SavedGame.fromJson(legacySaveData);
         require(legacySave.turnSpeed() == 6, "older saves must receive the default turn speed");
+        require(legacySave.collisionDuration() == 3 && legacySave.collisionReduction() == 50,
+                "older saves must receive the default collision settings");
+        CollisionSlowdown slowdown = new CollisionSlowdown(3, 50);
+        require(slowdown.speedMultiplier() == 1, "collision modifier is inactive before impact");
+        slowdown.trigger();
+        require(slowdown.speedMultiplier() == 0.5, "collision applies configured initial reduction");
+        slowdown.advance(1.5);
+        require(slowdown.speedMultiplier() == 0.75, "collision reduction should fade linearly");
+        slowdown.advance(1.5);
+        require(slowdown.speedMultiplier() == 1 && slowdown.remainingSeconds() == 0,
+                "collision reduction should expire after its configured duration");
         require(TurnMath.rotateToward(0, Math.PI / 2, Math.PI / 4) == Math.PI / 4,
                 "turning must be limited to the configured step");
         require(TurnMath.rotateToward(Math.toRadians(179), Math.toRadians(-179), Math.toRadians(3))
