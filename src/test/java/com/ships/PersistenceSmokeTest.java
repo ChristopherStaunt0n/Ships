@@ -1,7 +1,9 @@
 package com.ships;
 
 import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.geom.Point2D;
+import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -19,9 +21,31 @@ public final class PersistenceSmokeTest {
         List<ShipPreset> restored = entries.stream()
                 .map(entry -> ShipPreset.fromJson(ShipPreset.object(entry))).toList();
         require(restored.equals(presets), "preset JSON round-trip must preserve all visual states");
+        require(restored.stream().allMatch(preset -> preset.visuals().values().stream()
+                        .allMatch(visual -> visual.shape() == ShipPreset.ShapeKind.OVAL)),
+                "all durability hull shapes must be oval");
+        ShipPreset defaultPreset = restored.get(0);
+        java.awt.geom.Rectangle2D hullBounds = defaultPreset.shapeAt(100, 100, 0, 1).getBounds2D();
+        require(hullBounds.getWidth() == defaultPreset.length()
+                        && hullBounds.getHeight() == defaultPreset.width(),
+                "hull width and length must define its oval hit zone");
+        Map<String, Object> legacyPresetData = new java.util.LinkedHashMap<>(defaultPreset.toJson());
+        legacyPresetData.remove("width");
+        legacyPresetData.remove("length");
+        legacyPresetData.put("size", 48.0);
+        Map<String, Object> legacyVisuals = new java.util.LinkedHashMap<>(defaultPreset.visuals().entrySet().stream()
+                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey,
+                        entry -> Map.of("shape", "TRIANGLE", "color", entry.getValue().color()))));
+        legacyPresetData.put("visuals", legacyVisuals);
+        ShipPreset migratedPreset = ShipPreset.fromJson(legacyPresetData);
+        require(migratedPreset.width() == 24 && migratedPreset.length() == 48,
+                "legacy size-only presets must map to width and length");
+        require(migratedPreset.visuals().values().stream()
+                        .allMatch(visual -> visual.shape() == ShipPreset.ShapeKind.OVAL),
+                "legacy polygon presets must migrate to oval hulls");
 
         GameStore.SavedGame save = new GameStore.SavedGame(UUID.randomUUID().toString(), "Smoke test",
-                presets.get(0).id(), 125, 240, 75, 100, 5, 6, 3, 50, 15, 480, true, 120,
+                presets.get(0).id(), 125, 240, 75, 100, 5, 6, 3, 50, 15, 480, true, 7, 120,
                 List.of(new GameStore.EnemySave(presets.get(1).id(), 400, 350, 40, 80)));
         GameStore.SavedGame restoredSave = GameStore.SavedGame.fromJson(
                 ShipPreset.object(Json.parse(Json.stringify(save.toJson()))));
@@ -30,16 +54,19 @@ public final class PersistenceSmokeTest {
         require(restoredSave.collisionDuration() == 3 && restoredSave.collisionReduction() == 50,
                 "collision modifiers must round-trip through save data");
         require(restoredSave.showFrameRate(), "frame-rate preference must round-trip through save data");
+        require(restoredSave.maxEnemyShips() == 7, "enemy ship limit must round-trip through save data");
         Map<String, Object> legacySaveData = new java.util.LinkedHashMap<>(save.toJson());
         legacySaveData.remove("turnSpeed");
         legacySaveData.remove("collisionDuration");
         legacySaveData.remove("collisionReduction");
         legacySaveData.remove("showFrameRate");
+        legacySaveData.remove("maxEnemyShips");
         GameStore.SavedGame legacySave = GameStore.SavedGame.fromJson(legacySaveData);
         require(legacySave.turnSpeed() == 6, "older saves must receive the default turn speed");
         require(legacySave.collisionDuration() == 3 && legacySave.collisionReduction() == 50,
                 "older saves must receive the default collision settings");
         require(legacySave.showFrameRate(), "older saves must default to showing frame rate");
+        require(legacySave.maxEnemyShips() == 7, "older saves must use the default enemy cap");
         FrameRateCounter frameRate = new FrameRateCounter(0);
         for (int frame = 0; frame < 60; frame++) {
             frameRate.frame((long) frame * 16_000_000);
@@ -78,6 +105,22 @@ public final class PersistenceSmokeTest {
                 "holding steering must update player velocity toward the mouse");
         require(presets.get(0).shapeAt(100, 100, 0, 1).contains(100, 100),
                 "ship hit-zone shape must contain its center");
+        require(PirateShipRenderer.CANNONS_PER_SIDE == 5,
+                "each broadside must have five cannons to match the five-ball salvos");
+        require(PirateShipRenderer.FRONT_CANNONS == 2 && PirateShipRenderer.BACK_CANNONS == 3,
+                "end cannon counts must match the forward and rear salvos");
+        BufferedImage shipImage = new BufferedImage(120, 120, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D shipGraphics = shipImage.createGraphics();
+        for (ShipPreset.State state : ShipPreset.State.values()) {
+            double durability = switch (state) {
+                case FULL -> 1;
+                case HALF -> 0.5;
+                case SUNKEN -> 0;
+            };
+            PirateShipRenderer.draw(shipGraphics, presets.get(0), 60, 60, Math.PI / 3, durability);
+        }
+        shipGraphics.dispose();
+        require(shipImage.getRGB(60, 60) != 0, "pirate ship renderer must paint the customizable hull");
         ShipCollision.Body leftShip = new ShipCollision.Body(10, 20, 2, 0, 10);
         ShipCollision.Body rightShip = new ShipCollision.Body(25, 20, -2, 0, 10);
         require(ShipCollision.bounce(leftShip, rightShip), "overlapping ships must collide");

@@ -1,7 +1,8 @@
 package com.ships;
 
 import java.awt.Shape;
-import java.awt.geom.Path2D;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Ellipse2D;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -9,15 +10,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-record ShipPreset(String id, String name, double size, Map<String, Visual> visuals) {
-    enum ShapeKind { TRIANGLE, DIAMOND, HEXAGON }
+record ShipPreset(String id, String name, double width, double length, Map<String, Visual> visuals) {
+    enum ShapeKind { OVAL, TRIANGLE, DIAMOND, HEXAGON }
     enum State { FULL, HALF, SUNKEN }
     record Visual(ShapeKind shape, int color) {}
 
     ShipPreset {
         Objects.requireNonNull(id);
         Objects.requireNonNull(name);
-        size = Math.max(20, Math.min(90, size));
+        width = Math.max(18, Math.min(28, width));
+        length = Math.max(30, Math.min(48, length));
         visuals = Map.copyOf(visuals);
         for (State state : State.values()) {
             if (!visuals.containsKey(state.name())) throw new IllegalArgumentException("Missing " + state + " visual");
@@ -30,30 +32,16 @@ record ShipPreset(String id, String name, double size, Map<String, Visual> visua
     }
 
     Shape shapeAt(double x, double y, double angle, double durabilityRatio) {
-        Visual visual = visualFor(durabilityRatio);
-        double radius = size / 2.0;
-        Path2D path = new Path2D.Double();
-        int points = switch (visual.shape()) {
-            case TRIANGLE -> 3;
-            case DIAMOND -> 4;
-            case HEXAGON -> 6;
-        };
-        for (int i = 0; i < points; i++) {
-            double a = angle + (Math.PI * 2 * i / points);
-            double factor = visual.shape() == ShapeKind.DIAMOND && i % 2 == 1 ? 0.62 : 1.0;
-            double px = x + Math.cos(a) * radius * factor;
-            double py = y + Math.sin(a) * radius * factor;
-            if (i == 0) path.moveTo(px, py); else path.lineTo(px, py);
-        }
-        path.closePath();
-        return path;
+        Shape hull = new Ellipse2D.Double(x - length / 2, y - width / 2, length, width);
+        return AffineTransform.getRotateInstance(angle, x, y).createTransformedShape(hull);
     }
 
     Map<String, Object> toJson() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", id);
         data.put("name", name);
-        data.put("size", size);
+        data.put("width", width);
+        data.put("length", length);
         Map<String, Object> states = new LinkedHashMap<>();
         visuals.forEach((state, visual) -> states.put(state, Map.of(
                 "shape", visual.shape().name(), "color", visual.color())));
@@ -66,24 +54,26 @@ record ShipPreset(String id, String name, double size, Map<String, Visual> visua
         Map<String, Visual> visuals = new LinkedHashMap<>();
         for (State state : State.values()) {
             Map<String, Object> item = object(stateData.get(state.name()));
-            visuals.put(state.name(), new Visual(ShapeKind.valueOf(string(item, "shape")),
-                    (int) number(item, "color")));
+            if (item.get("shape") != null) ShapeKind.valueOf(string(item, "shape"));
+            visuals.put(state.name(), new Visual(ShapeKind.OVAL, (int) number(item, "color")));
         }
-        return new ShipPreset(string(data, "id"), string(data, "name"), number(data, "size"), visuals);
+        double width = data.containsKey("width") ? number(data, "width") : Math.min(28, number(data, "size") * 0.5);
+        double length = data.containsKey("length") ? number(data, "length") : Math.min(48, number(data, "size"));
+        return new ShipPreset(string(data, "id"), string(data, "name"), width, length, visuals);
     }
 
     static List<ShipPreset> defaults() {
         return List.of(
-                preset("Harbor Kite", 48, ShapeKind.TRIANGLE, 0x35B8A6, 0xC18B42, 0x62666C),
-                preset("Ironclad", 58, ShapeKind.HEXAGON, 0x4C86D9, 0xA96554, 0x555A66),
-                preset("Corsair", 42, ShapeKind.DIAMOND, 0xD9684D, 0xB78346, 0x5F6266));
+                preset("Harbor Kite", 25, 46, 0x35B8A6, 0xC18B42, 0x62666C),
+                preset("Ironclad", 28, 48, 0x4C86D9, 0xA96554, 0x555A66),
+                preset("Corsair", 22, 40, 0xD9684D, 0xB78346, 0x5F6266));
     }
 
-    private static ShipPreset preset(String name, double size, ShapeKind base, int full, int half, int sunken) {
-        return new ShipPreset(UUID.randomUUID().toString(), name, size, Map.of(
-                State.FULL.name(), new Visual(base, full),
-                State.HALF.name(), new Visual(base, half),
-                State.SUNKEN.name(), new Visual(ShapeKind.DIAMOND, sunken)));
+    private static ShipPreset preset(String name, double width, double length, int full, int half, int sunken) {
+        return new ShipPreset(UUID.randomUUID().toString(), name, width, length, Map.of(
+                State.FULL.name(), new Visual(ShapeKind.OVAL, full),
+                State.HALF.name(), new Visual(ShapeKind.OVAL, half),
+                State.SUNKEN.name(), new Visual(ShapeKind.OVAL, sunken)));
     }
 
     @SuppressWarnings("unchecked")

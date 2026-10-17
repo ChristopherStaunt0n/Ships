@@ -93,6 +93,9 @@ public final class ShipGame {
         JSlider speed = slider(2, 10, 5);
         JSlider turnSpeed = slider(1, 18, 6);
         JSlider durability = slider(50, 300, 150);
+        JSlider enemyLimit = slider(1, 10, 7);
+        enemyLimit.setMajorTickSpacing(1);
+        enemyLimit.setSnapToTicks(true);
         JSlider collisionReduction = slider(0, 90, 50);
         collisionReduction.setMajorTickSpacing(10);
         JSlider collisionDuration = slider(1, 10, 3);
@@ -105,6 +108,7 @@ public final class ShipGame {
         addSlider(panel, "Ship speed", speed, "px / frame");
         addSlider(panel, "Turn speed", turnSpeed, "degrees / frame");
         addSlider(panel, "Ship durability", durability, "hull points");
+        addSlider(panel, "Maximum enemy ships", enemyLimit, "ships");
         addSlider(panel, "Collision speed reduction", collisionReduction, "%");
         addSlider(panel, "Collision effect duration", collisionDuration, "seconds");
         addSlider(panel, "Cannon damage", damage, "damage / hit");
@@ -114,7 +118,7 @@ public final class ShipGame {
             ShipPreset chosen = (ShipPreset) presetChoice.getSelectedItem();
             if (chosen != null) startGame(chosen.id(), speed.getValue(), durability.getValue(),
                     turnSpeed.getValue(), collisionDuration.getValue(), collisionReduction.getValue(),
-                    damage.getValue(), range.getValue(), showFrameRate.isSelected(), null);
+                    damage.getValue(), range.getValue(), showFrameRate.isSelected(), enemyLimit.getValue(), null);
         });
         JPanel actions = new JPanel(new FlowLayout());
         actions.setOpaque(false);
@@ -176,7 +180,8 @@ public final class ShipGame {
                 }
                 startGame(selected.playerPresetId(), selected.speed(), selected.playerMaxHealth(),
                         selected.turnSpeed(), selected.collisionDuration(), selected.collisionReduction(),
-                        selected.damage(), selected.range(), selected.showFrameRate(), selected);
+                        selected.damage(), selected.range(), selected.showFrameRate(),
+                        selected.maxEnemyShips(), selected);
             }));
         }
         panel.add(menuButton("Back", this::showMenu));
@@ -223,7 +228,7 @@ public final class ShipGame {
 
     private void startGame(String presetId, double speed, double hp, double turnSpeed,
                            double collisionDuration, double collisionReduction, double damage, double range,
-                           boolean showFrameRate, GameStore.SavedGame saved) {
+                           boolean showFrameRate, int maxEnemyShips, GameStore.SavedGame saved) {
         ShipPreset playerPreset = findPreset(presetId);
         if (playerPreset == null) {
             JOptionPane.showMessageDialog(frame, "The saved player ship preset is missing. Choose another preset.",
@@ -232,7 +237,7 @@ public final class ShipGame {
             return;
         }
         gamePanel = new GamePanel(playerPreset, speed, hp, turnSpeed, collisionDuration,
-                collisionReduction, damage, range, showFrameRate, saved);
+                collisionReduction, damage, range, showFrameRate, maxEnemyShips, saved);
         JPanel page = new JPanel(new CardLayout());
         page.add(gamePanel, "play");
         page.add(pauseMenu(page), "pause");
@@ -254,9 +259,11 @@ public final class ShipGame {
             double gameCollisionReduction = gamePanel.collisionReduction;
             double gameDamage = gamePanel.player.damage, gameRange = gamePanel.player.range;
             boolean gameShowFrameRate = gamePanel.showFrameRate;
+            int gameMaxEnemyShips = gamePanel.maxEnemyShips;
             gamePanel.stop();
             startGame(id, gameSpeed, gameHp, gameTurnSpeed, gameCollisionDuration,
-                    gameCollisionReduction, gameDamage, gameRange, gameShowFrameRate, null);
+                    gameCollisionReduction, gameDamage, gameRange, gameShowFrameRate,
+                    gameMaxEnemyShips, null);
         });
         gamePanel.setExitAction(() -> {
             gamePanel.stop();
@@ -322,9 +329,9 @@ public final class ShipGame {
     private final class EditorPanel extends JPanel {
         private final JComboBox<ShipPreset> presetsBox = new JComboBox<>();
         private final JTextField name = new JTextField(20);
-        private final JSlider size = new JSlider(20, 90, 48);
         private final JComboBox<ShipPreset.State> state = new JComboBox<>(ShipPreset.State.values());
-        private final JComboBox<ShipPreset.ShapeKind> shape = new JComboBox<>(ShipPreset.ShapeKind.values());
+        private final JSlider width = new JSlider(18, 28, 25);
+        private final JSlider length = new JSlider(30, 48, 46);
         private final JButton colorButton = new JButton("Choose color");
         private final Preview preview = new Preview();
         private int color = 0x35B8A6;
@@ -349,13 +356,12 @@ public final class ShipGame {
             left.add(new JLabel("Preset name"));
             left.add(name);
             left.add(Box.createVerticalStrut(8));
-            left.add(new JLabel("Ship size"));
-            left.add(size);
+            left.add(new JLabel("Hull width"));
+            left.add(width);
+            left.add(new JLabel("Hull length"));
+            left.add(length);
             left.add(new JLabel("Durability appearance"));
             left.add(state);
-            left.add(Box.createVerticalStrut(8));
-            left.add(new JLabel("Body shape"));
-            left.add(shape);
             left.add(Box.createVerticalStrut(8));
             left.add(colorButton);
             left.add(Box.createVerticalStrut(15));
@@ -374,8 +380,8 @@ public final class ShipGame {
             add(preview, BorderLayout.EAST);
             presetsBox.addActionListener(e -> loadSelected());
             state.addActionListener(e -> loadStateVisual());
-            shape.addActionListener(e -> preview.repaint());
-            size.addChangeListener(e -> preview.repaint());
+            width.addChangeListener(e -> preview.repaint());
+            length.addChangeListener(e -> preview.repaint());
             colorButton.addActionListener(e -> {
                 Color selected = JColorChooser.showDialog(frame, "Choose ship color", new Color(color));
                 if (selected != null) { color = selected.getRGB() & 0xFFFFFF; updateColorButton(); preview.repaint(); }
@@ -393,7 +399,8 @@ public final class ShipGame {
             if (selected == null) return;
             editing = selected;
             name.setText(selected.name());
-            size.setValue((int) selected.size());
+            width.setValue((int) selected.width());
+            length.setValue((int) selected.length());
             loadStateVisual();
         }
 
@@ -401,7 +408,6 @@ public final class ShipGame {
             if (editing == null) return;
             ShipPreset.Visual visual = editing.visuals().get(((ShipPreset.State) state.getSelectedItem()).name());
             if (visual == null) return;
-            shape.setSelectedItem(visual.shape());
             color = visual.color();
             updateColorButton();
             preview.repaint();
@@ -415,10 +421,10 @@ public final class ShipGame {
 
         private void newPreset() {
             Map<String, ShipPreset.Visual> visuals = new LinkedHashMap<>();
-            visuals.put("FULL", new ShipPreset.Visual(ShipPreset.ShapeKind.TRIANGLE, 0x35B8A6));
-            visuals.put("HALF", new ShipPreset.Visual(ShipPreset.ShapeKind.TRIANGLE, 0xC18B42));
-            visuals.put("SUNKEN", new ShipPreset.Visual(ShipPreset.ShapeKind.DIAMOND, 0x62666C));
-            editing = new ShipPreset(UUID.randomUUID().toString(), "New Ship", 48, visuals);
+            visuals.put("FULL", new ShipPreset.Visual(ShipPreset.ShapeKind.OVAL, 0x35B8A6));
+            visuals.put("HALF", new ShipPreset.Visual(ShipPreset.ShapeKind.OVAL, 0xC18B42));
+            visuals.put("SUNKEN", new ShipPreset.Visual(ShipPreset.ShapeKind.OVAL, 0x62666C));
+            editing = new ShipPreset(UUID.randomUUID().toString(), "New Ship", 25, 46, visuals);
             presets.add(editing);
             updateList();
             presetsBox.setSelectedItem(editing);
@@ -432,8 +438,9 @@ public final class ShipGame {
             }
             Map<String, ShipPreset.Visual> visuals = new LinkedHashMap<>(editing.visuals());
             visuals.put(((ShipPreset.State) state.getSelectedItem()).name(),
-                    new ShipPreset.Visual((ShipPreset.ShapeKind) shape.getSelectedItem(), color));
-            ShipPreset updated = new ShipPreset(editing.id(), name.getText().trim(), size.getValue(), visuals);
+                    new ShipPreset.Visual(ShipPreset.ShapeKind.OVAL, color));
+            ShipPreset updated = new ShipPreset(editing.id(), name.getText().trim(),
+                    width.getValue(), length.getValue(), visuals);
             int index = presets.indexOf(editing);
             if (index >= 0) presets.set(index, updated);
             editing = updated;
@@ -467,22 +474,18 @@ public final class ShipGame {
                 super.paintComponent(graphics);
                 if (editing == null) return;
                 Graphics2D g = (Graphics2D) graphics.create();
-                ShipPreset.Visual visual = new ShipPreset.Visual((ShipPreset.ShapeKind) shape.getSelectedItem(), color);
                 Map<String, ShipPreset.Visual> visuals = new LinkedHashMap<>(editing.visuals());
-                visuals.put(((ShipPreset.State) state.getSelectedItem()).name(), visual);
+                visuals.put(((ShipPreset.State) state.getSelectedItem()).name(),
+                        new ShipPreset.Visual(ShipPreset.ShapeKind.OVAL, color));
                 ShipPreset previewPreset = new ShipPreset(editing.id(), name.getText().isBlank() ?
-                        editing.name() : name.getText(), size.getValue(), visuals);
+                        editing.name() : name.getText(), width.getValue(), length.getValue(), visuals);
                 double ratio = switch ((ShipPreset.State) state.getSelectedItem()) {
                     case FULL -> 1;
                     case HALF -> 0.5;
                     case SUNKEN -> 0;
                 };
-                Shape hull = previewPreset.shapeAt(getWidth() / 2.0, getHeight() / 2.0, -Math.PI / 2, ratio);
-                g.setColor(new Color(color));
-                g.fill(hull);
-                g.setColor(new Color(230, 239, 228));
-                g.setStroke(new BasicStroke(2));
-                g.draw(hull);
+                PirateShipRenderer.draw(g, previewPreset, getWidth() / 2.0, getHeight() / 2.0,
+                        -Math.PI / 2, ratio);
                 g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 15));
                 g.drawString(((ShipPreset.State) state.getSelectedItem()).name(), 15, 25);
                 g.dispose();
@@ -584,6 +587,7 @@ public final class ShipGame {
         private double wakeElapsed;
         private final double collisionDuration;
         private final double collisionReduction;
+        private final int maxEnemyShips;
         private final FrameRateCounter frameRateCounter = new FrameRateCounter(System.nanoTime());
         private boolean paused;
         private boolean gameOver;
@@ -593,17 +597,18 @@ public final class ShipGame {
 
         GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed,
                   double collisionDuration, double collisionReduction, double damage, double range,
-                  boolean showFrameRate, GameStore.SavedGame save) {
+                  boolean showFrameRate, int maxEnemyShips, GameStore.SavedGame save) {
             setBackground(SEA);
             setFocusable(true);
             this.collisionDuration = collisionDuration;
             this.collisionReduction = collisionReduction;
+            this.maxEnemyShips = Math.max(1, Math.min(10, maxEnemyShips));
             this.showFrameRate = showFrameRate;
             player = new Player(preset, 550, 380, hp, speed, turnSpeed, damage, range,
                     collisionDuration, collisionReduction);
             if (save == null) {
                 mouseX = player.x; mouseY = player.y;
-                for (int i = 0; i < 7; i++) spawnEnemy();
+                for (int i = 0; i < this.maxEnemyShips; i++) spawnEnemy();
             } else {
                 player.x = save.playerX(); player.y = save.playerY();
                 player.health = save.playerHealth();
@@ -618,7 +623,7 @@ public final class ShipGame {
                         enemies.add(e);
                     }
                 }
-                while (enemies.size() < 3) spawnEnemy();
+                while (enemies.size() < Math.min(3, this.maxEnemyShips)) spawnEnemy();
             }
             addMouseMotionListener(new MouseMotionAdapter() {
                 @Override public void mouseMoved(MouseEvent e) { mouseX = e.getX(); mouseY = e.getY(); }
@@ -757,7 +762,7 @@ public final class ShipGame {
                     enemy.y += enemy.vy * enemy.collisionSlowdown.speedMultiplier();
                 }
                 enemy.collisionSlowdown.advance(0.016);
-                if (wakeElapsed >= 0.09) addWake(enemy.x, enemy.y, enemy.angle, enemy.preset.size());
+                if (wakeElapsed >= 0.09) addWake(enemy.x, enemy.y, enemy.angle, enemy.preset.length());
                 ShipCollision.Body enemyBody = body(enemy);
                 ShipCollision.bounceAtBounds(enemyBody, getWidth(), getHeight(), 40);
                 applyBody(enemy, enemyBody);
@@ -769,7 +774,7 @@ public final class ShipGame {
                 }
             }
             if (wakeElapsed >= 0.09) {
-                addWake(player.x, player.y, player.angle, player.preset.size());
+                addWake(player.x, player.y, player.angle, player.preset.length());
                 wakeElapsed = 0;
             }
             resolveShipCollisions();
@@ -806,7 +811,7 @@ public final class ShipGame {
             enemies.removeIf(enemy -> enemy.health <= 0 && enemy.sinkingTime <= 0);
             long now = System.currentTimeMillis();
             collisionCooldowns.entrySet().removeIf(entry -> entry.getValue() <= now);
-            while (enemies.size() < 7) spawnEnemy();
+            while (enemies.size() < maxEnemyShips) spawnEnemy();
             if (player.health <= 0 && !gameOver) {
                 player.health = 0;
                 gameOver = true;
@@ -869,7 +874,7 @@ public final class ShipGame {
         private Point2D.Double avoidShips(Enemy enemy, Point2D.Double goal) {
             double x = goal.x;
             double y = goal.y;
-            double avoidDistance = enemy.preset.size() * 0.5 + player.preset.size() * 0.5 + 72;
+            double avoidDistance = enemy.preset.length() * 0.5 + player.preset.length() * 0.5 + 72;
             double awayX = enemy.x - player.x;
             double awayY = enemy.y - player.y;
             double distance = Math.hypot(awayX, awayY);
@@ -884,7 +889,7 @@ public final class ShipGame {
                 awayX = enemy.x - other.x;
                 awayY = enemy.y - other.y;
                 distance = Math.hypot(awayX, awayY);
-                avoidDistance = (enemy.preset.size() + other.preset.size()) * 0.5 + 56;
+                avoidDistance = (enemy.preset.length() + other.preset.length()) * 0.5 + 56;
                 if (distance < avoidDistance && distance > 0) {
                     double urgency = (avoidDistance - distance) / avoidDistance;
                     double force = 1.5 + urgency * 3.5;
@@ -967,11 +972,11 @@ public final class ShipGame {
         }
 
         private ShipCollision.Body body(Player ship) {
-            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.size() / 2);
+            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.length() / 2);
         }
 
         private ShipCollision.Body body(Enemy ship) {
-            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.size() / 2);
+            return new ShipCollision.Body(ship.x, ship.y, ship.vx, ship.vy, ship.preset.length() / 2);
         }
 
         private void applyBody(Player ship, ShipCollision.Body body) {
@@ -1025,7 +1030,7 @@ public final class ShipGame {
             return new GameStore.SavedGame(UUID.randomUUID().toString(), name, player.preset.id(),
                     player.x, player.y, player.health, player.maxHealth, player.speed, player.turnSpeed,
                     collisionDuration, collisionReduction, player.damage, player.range, showFrameRate,
-                    score, state);
+                    maxEnemyShips, score, state);
         }
 
         @Override protected void paintComponent(Graphics graphics) {
@@ -1035,22 +1040,13 @@ public final class ShipGame {
             paintOceanWaves(g);
             paintTrailParticles(g);
             for (Enemy enemy : enemies) {
-                Shape body = enemy.preset.shapeAt(enemy.x, enemy.y, enemy.angle, enemy.health / enemy.maxHealth);
-                g.setColor(new Color(enemy.preset.visualFor(enemy.health / enemy.maxHealth).color()));
-                g.fill(body);
-                g.setColor(new Color(15, 35, 43));
-                g.setStroke(new BasicStroke(2));
-                g.draw(body);
-                drawHealth(g, enemy.x - 22, enemy.y - enemy.preset.size() / 2 - 10, 44,
+                PirateShipRenderer.draw(g, enemy.preset, enemy.x, enemy.y, enemy.angle,
+                        enemy.health / enemy.maxHealth);
+                drawHealth(g, enemy.x - 22, enemy.y - enemy.preset.width() / 2 - 10, 44,
                         enemy.health / enemy.maxHealth);
             }
-            Shape playerBody = player.preset.shapeAt(player.x, player.y, player.angle,
+            PirateShipRenderer.draw(g, player.preset, player.x, player.y, player.angle,
                     player.health / player.maxHealth);
-            g.setColor(new Color(player.preset.visualFor(player.health / player.maxHealth).color()));
-            g.fill(playerBody);
-            g.setColor(new Color(237, 244, 223));
-            g.setStroke(new BasicStroke(2));
-            g.draw(playerBody);
             for (Cannonball ball : cannonballs) {
                 g.setColor(ball.fromPlayer ? new Color(255, 224, 143) : new Color(255, 122, 102));
                 g.fill(new Ellipse2D.Double(ball.x - 4, ball.y - 4, 8, 8));
