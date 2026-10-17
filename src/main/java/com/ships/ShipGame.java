@@ -98,6 +98,9 @@ public final class ShipGame {
         JSlider collisionDuration = slider(1, 10, 3);
         JSlider damage = slider(5, 40, 15);
         JSlider range = slider(200, 900, 480);
+        JCheckBox showFrameRate = new JCheckBox("Show frame rate counter", true);
+        showFrameRate.setOpaque(false);
+        showFrameRate.setForeground(Color.WHITE);
         addField(panel, "Player ship preset", presetChoice);
         addSlider(panel, "Ship speed", speed, "px / frame");
         addSlider(panel, "Turn speed", turnSpeed, "degrees / frame");
@@ -106,11 +109,12 @@ public final class ShipGame {
         addSlider(panel, "Collision effect duration", collisionDuration, "seconds");
         addSlider(panel, "Cannon damage", damage, "damage / hit");
         addSlider(panel, "Cannon range", range, "pixels");
+        panel.add(showFrameRate);
         JButton start = menuButton("Start voyage", () -> {
             ShipPreset chosen = (ShipPreset) presetChoice.getSelectedItem();
             if (chosen != null) startGame(chosen.id(), speed.getValue(), durability.getValue(),
                     turnSpeed.getValue(), collisionDuration.getValue(), collisionReduction.getValue(),
-                    damage.getValue(), range.getValue(), null);
+                    damage.getValue(), range.getValue(), showFrameRate.isSelected(), null);
         });
         JPanel actions = new JPanel(new FlowLayout());
         actions.setOpaque(false);
@@ -172,7 +176,7 @@ public final class ShipGame {
                 }
                 startGame(selected.playerPresetId(), selected.speed(), selected.playerMaxHealth(),
                         selected.turnSpeed(), selected.collisionDuration(), selected.collisionReduction(),
-                        selected.damage(), selected.range(), selected);
+                        selected.damage(), selected.range(), selected.showFrameRate(), selected);
             }));
         }
         panel.add(menuButton("Back", this::showMenu));
@@ -219,7 +223,7 @@ public final class ShipGame {
 
     private void startGame(String presetId, double speed, double hp, double turnSpeed,
                            double collisionDuration, double collisionReduction, double damage, double range,
-                           GameStore.SavedGame saved) {
+                           boolean showFrameRate, GameStore.SavedGame saved) {
         ShipPreset playerPreset = findPreset(presetId);
         if (playerPreset == null) {
             JOptionPane.showMessageDialog(frame, "The saved player ship preset is missing. Choose another preset.",
@@ -228,7 +232,7 @@ public final class ShipGame {
             return;
         }
         gamePanel = new GamePanel(playerPreset, speed, hp, turnSpeed, collisionDuration,
-                collisionReduction, damage, range, saved);
+                collisionReduction, damage, range, showFrameRate, saved);
         JPanel page = new JPanel(new CardLayout());
         page.add(gamePanel, "play");
         page.add(pauseMenu(page), "pause");
@@ -249,9 +253,10 @@ public final class ShipGame {
             double gameCollisionDuration = gamePanel.collisionDuration;
             double gameCollisionReduction = gamePanel.collisionReduction;
             double gameDamage = gamePanel.player.damage, gameRange = gamePanel.player.range;
+            boolean gameShowFrameRate = gamePanel.showFrameRate;
             gamePanel.stop();
             startGame(id, gameSpeed, gameHp, gameTurnSpeed, gameCollisionDuration,
-                    gameCollisionReduction, gameDamage, gameRange, null);
+                    gameCollisionReduction, gameDamage, gameRange, gameShowFrameRate, null);
         });
         gamePanel.setExitAction(() -> {
             gamePanel.stop();
@@ -275,6 +280,12 @@ public final class ShipGame {
         menu.add(Box.createVerticalStrut(22));
         menu.add(menuButton("Resume", () -> gamePanel.resume()));
         menu.add(menuButton("Save current game", () -> gamePanel.save()));
+        JCheckBox fpsToggle = new JCheckBox("Show frame rate counter", gamePanel.showFrameRate);
+        fpsToggle.setOpaque(false);
+        fpsToggle.setForeground(Color.WHITE);
+        fpsToggle.setAlignmentX(Component.CENTER_ALIGNMENT);
+        fpsToggle.addActionListener(e -> gamePanel.setFrameRateVisible(fpsToggle.isSelected()));
+        menu.add(fpsToggle);
         menu.add(menuButton("Restart current game", () -> gamePanel.restart()));
         menu.add(menuButton("Load a different game", () -> gamePanel.load()));
         menu.add(menuButton("Exit current game", () -> gamePanel.exit()));
@@ -573,18 +584,21 @@ public final class ShipGame {
         private double wakeElapsed;
         private final double collisionDuration;
         private final double collisionReduction;
+        private final FrameRateCounter frameRateCounter = new FrameRateCounter(System.nanoTime());
         private boolean paused;
         private boolean gameOver;
         private boolean steeringToMouse;
+        private boolean showFrameRate;
         private Runnable pauseAction, resumeAction, saveAction, loadAction, restartAction, exitAction;
 
         GamePanel(ShipPreset preset, double speed, double hp, double turnSpeed,
                   double collisionDuration, double collisionReduction, double damage, double range,
-                  GameStore.SavedGame save) {
+                  boolean showFrameRate, GameStore.SavedGame save) {
             setBackground(SEA);
             setFocusable(true);
             this.collisionDuration = collisionDuration;
             this.collisionReduction = collisionReduction;
+            this.showFrameRate = showFrameRate;
             player = new Player(preset, 550, 380, hp, speed, turnSpeed, damage, range,
                     collisionDuration, collisionReduction);
             if (save == null) {
@@ -645,8 +659,17 @@ public final class ShipGame {
         void setLoadAction(Runnable action) { loadAction = action; }
         void setRestartAction(Runnable action) { restartAction = action; }
         void setExitAction(Runnable action) { exitAction = action; }
+        void setFrameRateVisible(boolean visible) {
+            showFrameRate = visible;
+            repaint();
+        }
         void stop() { timer.stop(); }
-        void resume() { paused = false; timer.start(); resumeAction.run(); }
+        void resume() {
+            frameRateCounter.reset(System.nanoTime());
+            paused = false;
+            timer.start();
+            resumeAction.run();
+        }
         void pause() {
             if (paused) return;
             paused = true; timer.stop(); pauseAction.run();
@@ -690,6 +713,7 @@ public final class ShipGame {
 
         private void tick() {
             if (paused) return;
+            frameRateCounter.frame(System.nanoTime());
             elapsed += 0.016;
             wakeElapsed += 0.016;
             double dx = mouseX - player.x, dy = mouseY - player.y;
@@ -1000,7 +1024,8 @@ public final class ShipGame {
                     new GameStore.EnemySave(e.preset.id(), e.x, e.y, e.health, e.maxHealth)).toList();
             return new GameStore.SavedGame(UUID.randomUUID().toString(), name, player.preset.id(),
                     player.x, player.y, player.health, player.maxHealth, player.speed, player.turnSpeed,
-                    collisionDuration, collisionReduction, player.damage, player.range, score, state);
+                    collisionDuration, collisionReduction, player.damage, player.range, showFrameRate,
+                    score, state);
         }
 
         @Override protected void paintComponent(Graphics graphics) {
@@ -1046,20 +1071,59 @@ public final class ShipGame {
         }
 
         private void paintOceanWaves(Graphics2D g) {
-            g.setColor(new Color(157, 218, 215, 36));
+            paintOceanColor(g);
             g.setStroke(new BasicStroke(1.2f));
             double phase = elapsed * 0.8;
             for (int row = -1; row < getHeight() / 46 + 2; row++) {
                 double baseY = row * 46 + 18;
+                float depth = getHeight() == 0 ? 0.5f : (float) Math.min(1,
+                        Math.abs(baseY - getHeight() / 2.0) / (getHeight() * 0.5));
+                int green = (int) (190 - depth * 32);
+                int blue = (int) (218 - depth * 18);
+                int alpha = (int) (30 + depth * 18);
+                g.setColor(new Color(95 + (int) (depth * 24), green, blue, alpha));
                 Path2D wave = new Path2D.Double();
                 for (int x = -12; x <= getWidth() + 12; x += 12) {
                     double along = x * 0.014 + phase + row * 0.63;
-                    double y = baseY + Math.sin(along) * 5 + Math.sin(along * 0.43 + phase * 0.7) * 2.2;
+                    double y = baseY + Math.sin(along) * 5
+                            + Math.sin(along * 0.43 + phase * 0.7) * 2.2
+                            + Math.sin(x * 0.004 - phase * 0.5 + row) * 2.5;
                     if (x == -12) wave.moveTo(x, y);
                     else wave.lineTo(x, y);
                 }
                 g.draw(wave);
             }
+        }
+
+        private void paintOceanColor(Graphics2D g) {
+            int height = getHeight();
+            int width = getWidth();
+            if (width <= 0 || height <= 0) return;
+
+            g.setPaint(new LinearGradientPaint(0, 0, 0, height,
+                    new float[]{0, 0.16f, 0.5f, 0.84f, 1},
+                    new Color[]{
+                            new Color(57, 151, 145),
+                            new Color(29, 112, 116),
+                            new Color(10, 54, 77),
+                            new Color(29, 112, 116),
+                            new Color(57, 151, 145)
+                    }));
+            g.fillRect(0, 0, width, height);
+
+            double drift = (elapsed * 24) % (width * 2.0);
+            float startX = (float) (-width + drift);
+            float endX = startX + width;
+            g.setPaint(new LinearGradientPaint(startX, 0, endX, 0,
+                    new float[]{0, 0.24f, 0.49f, 0.75f, 1},
+                    new Color[]{
+                            new Color(42, 181, 151, 35),
+                            new Color(47, 137, 176, 24),
+                            new Color(56, 190, 151, 42),
+                            new Color(40, 127, 181, 25),
+                            new Color(42, 181, 151, 35)
+                    }, MultipleGradientPaint.CycleMethod.REFLECT));
+            g.fillRect(0, 0, width, height);
         }
 
         private void drawHealth(Graphics2D g, double x, double y, double width, double ratio) {
@@ -1070,6 +1134,17 @@ public final class ShipGame {
         }
 
         private void paintHud(Graphics2D g) {
+            if (showFrameRate) {
+                String frameRate = "FPS: " + frameRateCounter.displayedFrames();
+                FontMetrics metrics = g.getFontMetrics(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+                int width = metrics.stringWidth(frameRate) + 18;
+                int x = getWidth() - width - 16;
+                g.setColor(new Color(7, 25, 37, 190));
+                g.fillRoundRect(x, 14, width, 27, 8, 8);
+                g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+                g.setColor(Color.WHITE);
+                g.drawString(frameRate, x + 9, 32);
+            }
             g.setColor(new Color(7, 25, 37, 220));
             g.fillRoundRect(16, 14, 285, 87, 12, 12);
             g.setColor(Color.WHITE);
