@@ -1030,8 +1030,19 @@ public final class ShipGame {
                 g.setColor(ball.fromPlayer ? new Color(255, 224, 143) : new Color(255, 122, 102));
                 g.fill(new Ellipse2D.Double(ball.x - 4, ball.y - 4, 8, 8));
             }
+            paintSkyTint(g);
             paintHud(g);
             g.dispose();
+        }
+
+        private void paintSkyTint(Graphics2D g) {
+            if (getHeight() <= 0) return;
+            Graphics2D tint = (Graphics2D) g.create();
+            tint.setPaint(new LinearGradientPaint(0, 0, 0, getHeight(),
+                    new float[]{0, 1},
+                    new Color[]{SkyCycle.topTint(elapsed), SkyCycle.horizonTint(elapsed)}));
+            tint.fillRect(0, 0, getWidth(), getHeight());
+            tint.dispose();
         }
 
         private void paintOceanWaves(Graphics2D g) {

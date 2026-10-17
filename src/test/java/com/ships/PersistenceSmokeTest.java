@@ -1,5 +1,6 @@
 package com.ships;
 
+import java.awt.Color;
 import java.awt.geom.Point2D;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,14 @@ public final class PersistenceSmokeTest {
         require(TurnMath.rotateToward(Math.toRadians(179), Math.toRadians(-179), Math.toRadians(3))
                         == Math.toRadians(-179),
                 "turning must use the shortest direction across angle wraparound");
+        require(SkyCycle.topTint(0).equals(SkyCycle.topTint(SkyCycle.CYCLE_SECONDS)),
+                "sky tint must repeat at the five-minute cycle boundary");
+        Color nightTint = SkyCycle.topTint(0);
+        Color daylightTint = SkyCycle.topTint(SkyCycle.CYCLE_SECONDS * 0.5);
+        require(!nightTint.equals(daylightTint) && daylightTint.getAlpha() < nightTint.getAlpha(),
+                "sky tint must transition between night and a less-tinted daylight");
+        require(SkyCycle.horizonTint(SkyCycle.CYCLE_SECONDS * 0.2).getAlpha() < 255,
+                "sky tint must remain translucent");
         Point2D.Double coastingVelocity = PlayerControls.velocityTowardMouse(3, -2, -8, 7, 5, false);
         require(coastingVelocity.x == 3 && coastingVelocity.y == -2,
                 "mouse movement must not redirect player velocity when steering is inactive");
